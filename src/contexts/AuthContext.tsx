@@ -6,6 +6,7 @@ interface User {
   name: string;
   email: string;
   role: string;
+  blockedUsers?: string[];
   skillsOffered: Skill[];
   skillsWanted: Skill[];
   location?: string;

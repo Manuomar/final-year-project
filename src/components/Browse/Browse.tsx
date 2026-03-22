@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Search, MapPin, Star, MessageSquare, Filter, X } from 'lucide-react';
+import { Search, MapPin, Star, MessageSquare, Filter, X, UserX } from 'lucide-react';
 import axios from 'axios';
 import { useAuth } from '../../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 
 interface User {
   _id: string;
@@ -11,6 +12,8 @@ interface User {
   skillsWanted: Skill[];
   rating: { average: number; count: number };
   availability: Availability;
+  isBlockedByMe?: boolean;
+  canBlock?: boolean;
 }
 
 interface Skill {
@@ -28,13 +31,16 @@ interface Availability {
 
 const Browse: React.FC = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [users, setUsers] = useState<User[]>([]);
+  const [blockedUsers, setBlockedUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [locationFilter, setLocationFilter] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showSwapModal, setShowSwapModal] = useState(false);
+  const [blockingUserId, setBlockingUserId] = useState<string | null>(null);
   const [swapForm, setSwapForm] = useState({
     skillOffered: { name: '', level: '' },
     skillRequested: { name: '', level: '' },
@@ -51,9 +57,14 @@ const Browse: React.FC = () => {
       const params = new URLSearchParams();
       if (searchTerm) params.append('skill', searchTerm);
       if (locationFilter) params.append('location', locationFilter);
-      
-      const response = await axios.get(`/api/users/browse?${params}`);
-      setUsers(response.data.users);
+
+      const [browseResponse, blockedResponse] = await Promise.all([
+        axios.get(`/api/users/browse?${params}`),
+        axios.get('/api/users/blocked')
+      ]);
+
+      setUsers(browseResponse.data.users);
+      setBlockedUsers(blockedResponse.data.users || []);
     } catch (error) {
       console.error('Error fetching users:', error);
     } finally {
@@ -62,7 +73,7 @@ const Browse: React.FC = () => {
   };
 
   const handleSwapRequest = async () => {
-    if (!selectedUser) return;
+    if (!selectedUser || selectedUser.isBlockedByMe) return;
 
     try {
       await axios.post('/api/swaps', {
@@ -81,6 +92,52 @@ const Browse: React.FC = () => {
       alert('Swap request sent successfully!');
     } catch (error: any) {
       alert(error.response?.data?.error || 'Failed to send swap request');
+    }
+  };
+
+  const handleBlockUser = async (targetUser: User) => {
+    if (!targetUser.canBlock) {
+      alert('You can block users only after at least one accepted swap with them.');
+      return;
+    }
+
+    const shouldBlock = window.confirm(`Block ${targetUser.name}? They won't be able to see your profile in browse.`);
+    if (!shouldBlock) return;
+
+    try {
+      setBlockingUserId(targetUser._id);
+      await axios.post(`/api/users/${targetUser._id}/block`);
+      setUsers((previousUsers) => previousUsers.filter((currentUser) => currentUser._id !== targetUser._id));
+      setBlockedUsers((previousBlockedUsers) => {
+        if (previousBlockedUsers.some((blockedUser) => blockedUser._id === targetUser._id)) {
+          return previousBlockedUsers;
+        }
+        return [...previousBlockedUsers, { ...targetUser, isBlockedByMe: true }];
+      });
+      alert(`${targetUser.name} has been blocked.`);
+    } catch (error: any) {
+      alert(error.response?.data?.error || 'Failed to block user');
+    } finally {
+      setBlockingUserId(null);
+    }
+  };
+
+  const handleUnblockUser = async (targetUser: User) => {
+    const shouldUnblock = window.confirm(`Unblock ${targetUser.name}?`);
+    if (!shouldUnblock) return;
+
+    try {
+      setBlockingUserId(targetUser._id);
+      await axios.delete(`/api/users/${targetUser._id}/block`);
+      setBlockedUsers((previousBlockedUsers) =>
+        previousBlockedUsers.filter((blockedUser) => blockedUser._id !== targetUser._id)
+      );
+      fetchUsers();
+      alert(`${targetUser.name} has been unblocked.`);
+    } catch (error: any) {
+      alert(error.response?.data?.error || 'Failed to unblock user');
+    } finally {
+      setBlockingUserId(null);
     }
   };
 
@@ -115,6 +172,15 @@ const Browse: React.FC = () => {
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-900 mb-4">Browse Skills</h1>
         <p className="text-gray-600">Find people with skills you want to learn</p>
+        <div className="mt-4">
+          <button
+            onClick={() => navigate('/blocked-users')}
+            className="inline-flex items-center space-x-2 px-4 py-2 border border-red-200 text-red-700 rounded-lg hover:bg-red-50 transition-colors"
+          >
+            <UserX className="h-4 w-4" />
+            <span>Blocked Users ({blockedUsers.length})</span>
+          </button>
+        </div>
       </div>
 
       {/* Search and Filters */}
@@ -235,16 +301,37 @@ const Browse: React.FC = () => {
               </div>
             </div>
 
-            <button
-              onClick={() => {
-                setSelectedUser(browsedUser);
-                setShowSwapModal(true);
-              }}
-              className="w-full mt-4 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2"
-            >
-              <MessageSquare className="h-4 w-4" />
-              <span>Request Swap</span>
-            </button>
+            <div className="mt-4 space-y-2">
+              <button
+                onClick={() => {
+                  if (browsedUser.isBlockedByMe) return;
+                  setSelectedUser(browsedUser);
+                  setShowSwapModal(true);
+                }}
+                disabled={!!browsedUser.isBlockedByMe}
+                className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center justify-center space-x-2"
+              >
+                <MessageSquare className="h-4 w-4" />
+                <span>{browsedUser.isBlockedByMe ? 'User Blocked' : 'Request Swap'}</span>
+              </button>
+
+              {/* <button
+                onClick={() => browsedUser.isBlockedByMe ? handleUnblockUser(browsedUser) : handleBlockUser(browsedUser)}
+                disabled={(!browsedUser.canBlock && !browsedUser.isBlockedByMe) || blockingUserId === browsedUser._id}
+                className="w-full border border-red-200 text-red-700 px-4 py-2 rounded-lg hover:bg-red-50 disabled:text-gray-500 disabled:border-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center space-x-2"
+              >
+                <UserX className="h-4 w-4" />
+                <span>
+                  {blockingUserId === browsedUser._id
+                    ? 'Processing...'
+                    : browsedUser.isBlockedByMe
+                      ? 'Unblock User'
+                    : !browsedUser.canBlock
+                      ? 'Block available after accepted swap'
+                      : 'Block User'}
+                </span>
+              </button> */}
+            </div>
           </div>
         ))}
       </div>
@@ -267,6 +354,8 @@ const Browse: React.FC = () => {
               </h3>
               <button
                 onClick={() => setShowSwapModal(false)}
+                title="Close swap request modal"
+                aria-label="Close swap request modal"
                 className="text-gray-400 hover:text-gray-600"
               >
                 <X className="h-5 w-5" />
@@ -287,6 +376,8 @@ const Browse: React.FC = () => {
                       skillOffered: skill ? { name: skill.name, level: skill.level } : { name: '', level: '' }
                     });
                   }}
+                  title="Select skill you're offering"
+                  aria-label="Select skill you're offering"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
                   <option value="">Select a skill</option>
@@ -311,6 +402,8 @@ const Browse: React.FC = () => {
                       skillRequested: skill ? { name: skill.name, level: skill.level } : { name: '', level: '' }
                     });
                   }}
+                  title="Select skill you want"
+                  aria-label="Select skill you want"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
                   <option value="">Select a skill</option>

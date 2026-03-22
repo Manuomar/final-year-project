@@ -19,6 +19,18 @@ router.post('/', auth, async (req, res) => {
       return res.status(404).json({ error: 'Recipient not found' });
     }
 
+    const isBlockedByRecipient = recipient.blockedUsers?.some(
+      (blockedUserId) => blockedUserId.toString() === req.user._id.toString()
+    );
+
+    const hasRequesterBlockedRecipient = req.user.blockedUsers?.some(
+      (blockedUserId) => blockedUserId.toString() === recipient._id.toString()
+    );
+
+    if (isBlockedByRecipient || hasRequesterBlockedRecipient) {
+      return res.status(403).json({ error: 'You cannot send a request to this user' });
+    }
+
     const swapRequest = new SwapRequest({
       requester: req.user._id,
       recipient: recipientId,
@@ -41,6 +53,17 @@ router.get('/my-requests', auth, async (req, res) => {
   try {
     const { status, type = 'all' } = req.query;
     let query = {};
+    const blockedByMeIds = (req.user.blockedUsers || []).map((blockedUserId) => blockedUserId.toString());
+
+    const usersWhoBlockedMe = await User.find({
+      blockedUsers: req.user._id,
+      isActive: true
+    }).select('_id');
+
+    const hiddenUserIds = new Set([
+      ...blockedByMeIds,
+      ...usersWhoBlockedMe.map((blockedUser) => blockedUser._id.toString())
+    ]);
 
     if (type === 'sent') {
       query.requester = req.user._id;
@@ -62,7 +85,15 @@ router.get('/my-requests', auth, async (req, res) => {
       .populate('recipient', 'name profilePhoto rating')
       .sort({ createdAt: -1 });
 
-    res.json({ swapRequests });
+    const visibleSwapRequests = swapRequests.filter((swapRequest) => {
+      const requesterId = swapRequest.requester?._id?.toString();
+      const recipientId = swapRequest.recipient?._id?.toString();
+
+      const otherUserId = requesterId === req.user._id.toString() ? recipientId : requesterId;
+      return otherUserId ? !hiddenUserIds.has(otherUserId) : true;
+    });
+
+    res.json({ swapRequests: visibleSwapRequests });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

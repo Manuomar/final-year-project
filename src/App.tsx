@@ -10,6 +10,7 @@ import Swaps from './components/Swaps/Swaps';
 import Profile from './components/Profile/Profile';
 import Admin from './components/Admin/Admin';
 import Chat from './components/Chat/Chat';
+import BlockedUsers from './components/BlockedUsers/BlockedUsers';
 import Room from './pages/Room';
 // Protected Route Component
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -87,6 +88,14 @@ const AppContent: React.FC = () => {
               <Swaps />
             </ProtectedRoute>
           } 
+        />
+        <Route
+          path="/blocked-users"
+          element={
+            <ProtectedRoute>
+              <BlockedUsers />
+            </ProtectedRoute>
+          }
         />
         <Route 
           path="/chat/:swapId" 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MessageSquare, Clock, CheckCircle, XCircle, Star, Trash2 } from 'lucide-react';
+import { MessageSquare, Clock, CheckCircle, XCircle, Star, Trash2, UserX } from 'lucide-react';
 import axios from 'axios';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -29,7 +29,14 @@ const Swaps: React.FC = () => {
   const [showMeetingModal, setShowMeetingModal] = useState(false);
   const [feedback, setFeedback] = useState({ rating: 5, comment: '' });
   const [meetingDetails, setMeetingDetails] = useState('');
+  const [blockingUserId, setBlockingUserId] = useState<string | null>(null);
+  const [blockedUserIds, setBlockedUserIds] = useState<string[]>(user?.blockedUsers || []);
 const navigate = useNavigate();
+
+  useEffect(() => {
+    setBlockedUserIds(user?.blockedUsers || []);
+  }, [user]);
+
   useEffect(() => {
     fetchSwaps();
   }, [filter]);
@@ -91,6 +98,44 @@ const navigate = useNavigate();
     }
   };
 
+  const handleBlockUser = async (targetUserId: string, targetUserName: string) => {
+    if (blockedUserIds.includes(targetUserId)) return;
+
+    const shouldBlock = window.confirm(`Block ${targetUserName}? They will not be able to find your profile in browse.`);
+    if (!shouldBlock) return;
+
+    try {
+      setBlockingUserId(targetUserId);
+      await axios.post(`/api/users/${targetUserId}/block`);
+      setBlockedUserIds((previousIds) => [...previousIds, targetUserId]);
+      fetchSwaps();
+      alert(`${targetUserName} has been blocked.`);
+    } catch (error: any) {
+      alert(error.response?.data?.error || 'Failed to block user');
+    } finally {
+      setBlockingUserId(null);
+    }
+  };
+
+  const handleUnblockUser = async (targetUserId: string, targetUserName: string) => {
+    if (!blockedUserIds.includes(targetUserId)) return;
+
+    const shouldUnblock = window.confirm(`Unblock ${targetUserName}?`);
+    if (!shouldUnblock) return;
+
+    try {
+      setBlockingUserId(targetUserId);
+      await axios.delete(`/api/users/${targetUserId}/block`);
+      setBlockedUserIds((previousIds) => previousIds.filter((currentId) => currentId !== targetUserId));
+      fetchSwaps();
+      alert(`${targetUserName} has been unblocked.`);
+    } catch (error: any) {
+      alert(error.response?.data?.error || 'Failed to unblock user');
+    } finally {
+      setBlockingUserId(null);
+    }
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
@@ -128,6 +173,12 @@ const navigate = useNavigate();
   const filteredSwaps = swaps.filter(swap => {
     if (filter === 'all') return true;
     return swap.status === filter;
+  });
+
+  const visibleSwaps = filteredSwaps.filter((swap) => {
+    const isRequester = swap.requester._id === user?._id;
+    const otherUserId = isRequester ? swap.recipient._id : swap.requester._id;
+    return !blockedUserIds.includes(otherUserId);
   });
 
   if (loading) {
@@ -173,7 +224,7 @@ const navigate = useNavigate();
 
       {/* Swaps List */}
       <div className="space-y-6">
-        {filteredSwaps.map((swap) => {
+        {visibleSwaps.map((swap) => {
           const isRequester = swap.requester._id === user?._id;
           const otherUser = isRequester ? swap.recipient : swap.requester;
           
@@ -297,7 +348,7 @@ const navigate = useNavigate();
                 )}
                 {swap.status === 'accepted' && (
                   <button
-                    onClick={() => videocallbtn(swap._id)}
+                    onClick={() => videocallbtn()}
                     className="px-4 py-2 bg-red-400 text-white rounded-lg hover:bg-red-600 transition-colors flex items-center space-x-2"
                   >
                     <span className="h-4 w-4" >📹</span>
@@ -313,6 +364,25 @@ const navigate = useNavigate();
                   >
                     <Star className="h-4 w-4" />
                     <span>Mark as Completed</span>
+                  </button>
+                )}
+
+                {(swap.status === 'accepted' || swap.status === 'completed') && (
+                  <button
+                    onClick={() => blockedUserIds.includes(otherUser._id)
+                      ? handleUnblockUser(otherUser._id, otherUser.name)
+                      : handleBlockUser(otherUser._id, otherUser.name)}
+                    disabled={blockingUserId === otherUser._id}
+                    className="px-4 py-2 border border-red-200 text-red-700 rounded-lg hover:bg-red-50 disabled:text-gray-500 disabled:border-gray-300 disabled:cursor-not-allowed transition-colors flex items-center space-x-2"
+                  >
+                    <UserX className="h-4 w-4" />
+                    <span>
+                      {blockingUserId === otherUser._id
+                        ? 'Processing...'
+                        : blockedUserIds.includes(otherUser._id)
+                          ? 'Unblock User'
+                          : 'Block User'}
+                    </span>
                   </button>
                 )}
 
@@ -344,7 +414,7 @@ const navigate = useNavigate();
         })}
       </div>
 
-      {filteredSwaps.length === 0 && (
+      {visibleSwaps.length === 0 && (
         <div className="text-center py-12">
           <MessageSquare className="h-12 w-12 text-gray-400 mx-auto mb-4" />
           <h3 className="text-lg font-medium text-gray-900 mb-2">No swap requests found</h3>
@@ -407,6 +477,8 @@ const navigate = useNavigate();
                     <button
                       key={star}
                       onClick={() => setFeedback({ ...feedback, rating: star })}
+                      title={`Rate ${star} star${star > 1 ? 's' : ''}`}
+                      aria-label={`Rate ${star} star${star > 1 ? 's' : ''}`}
                       className={`h-8 w-8 ${
                         star <= feedback.rating ? 'text-yellow-400' : 'text-gray-300'
                       }`}
